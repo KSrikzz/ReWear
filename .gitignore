@@ -1,0 +1,12 @@
+.agents/
+*.env
+.env
+.env.*
+!.env.example
+node_modules/
+target/
+dist/
+*.log
+.DS_Store
+.vscode/
+.idea/
