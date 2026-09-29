@@ -146,6 +146,23 @@ public class AdminService {
     }
 
     @Transactional
+    public Map<String, Object> resolveDispute(Jwt jwt, UUID bookingId, String resolution) {
+        requireAdmin(jwt);
+        Map<String, Object> booking;
+        try { booking = jdbc.queryForMap("SELECT * FROM bookings WHERE id = :id", Map.of("id", bookingId)); }
+        catch (Exception e) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Rental not found."); }
+        if (!"disputed".equals(booking.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only disputed rentals can be resolved.");
+        }
+        java.math.BigDecimal gross = (java.math.BigDecimal) booking.get("rental_price");
+        java.math.BigDecimal rate = (java.math.BigDecimal) booking.get("commission_rate");
+        java.math.BigDecimal fee = gross.multiply(rate).setScale(0, java.math.RoundingMode.HALF_UP);
+        java.math.BigDecimal net = gross.subtract(fee);
+        jdbc.update("UPDATE bookings SET status = 'completed', updated_at = now(), completed_at = now(), commission_amount = :fee, owner_payout = :net WHERE id = :id", Map.of("fee", fee, "net", net, "id", bookingId));
+        jdbc.update("INSERT INTO commission_ledger (booking_id, owner_id, gross_amount, commission_rate, commission_amount, owner_net_amount, status) VALUES (:bookingId, :ownerId, :gross, :rate, :fee, :net, 'estimated') ON CONFLICT (booking_id) DO NOTHING", Map.of("bookingId", bookingId, "ownerId", booking.get("owner_id"), "gross", gross, "rate", rate, "fee", fee, "net", net));
+        return Map.of("success", true);
+    }
+
     public Map<String, Object> decide(Jwt jwt, UUID claimId, ClaimDecision decision) {
         requireAdmin(jwt);
         String status = decision.decision().trim().toLowerCase();
@@ -178,3 +195,4 @@ public class AdminService {
         return profile;
     }
 }
+

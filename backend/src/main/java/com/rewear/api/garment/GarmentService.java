@@ -68,7 +68,7 @@ public class GarmentService {
         this.profiles = profiles;
     }
 
-    public List<Map<String, Object>> browse(String query, String category, String size, Integer maxPrice) {
+    public List<Map<String, Object>> browse(String query, String category, String size, Integer maxPrice, Integer limit, Integer offset) {
         StringBuilder sql = new StringBuilder(SELECT_WITH_INSIGHTS)
             .append(" WHERE g.active = true AND g.under_maintenance = false AND g.retired_at IS NULL");
         MapSqlParameterSource params = new MapSqlParameterSource();
@@ -88,7 +88,9 @@ public class GarmentService {
             sql.append(" AND g.rental_price <= :maxPrice");
             params.addValue("maxPrice", maxPrice);
         }
-        sql.append(" ORDER BY g.created_at DESC");
+        sql.append(" ORDER BY g.created_at DESC LIMIT :limit OFFSET :offset");
+        params.addValue("limit", Math.min(limit != null ? limit : 50, 100));
+        params.addValue("offset", offset != null ? offset : 0);
         return withArrayFields(jdbc.queryForList(sql.toString(), params));
     }
 
@@ -550,3 +552,5 @@ public class GarmentService {
         }
     }
 }
+
+

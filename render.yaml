@@ -18,3 +18,17 @@ services:
         sync: false
       - key: FRONTEND_ORIGIN
         sync: false
+      - key: REWEAR_ML_SERVICE_URL
+        value: https://rewear-ml.onrender.com
+  - type: web
+    name: rewear-ml
+    runtime: docker
+    dockerfilePath: ./ml-service/Dockerfile
+    dockerContext: ./ml-service
+    plan: free
+    region: oregon
+    healthCheckPath: /docs
+    envVars:
+      - key: PORT
+        value: 8000
+

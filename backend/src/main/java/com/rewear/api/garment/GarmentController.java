@@ -39,8 +39,10 @@ public class GarmentController {
         @RequestParam(required = false) String q,
         @RequestParam(required = false) String category,
         @RequestParam(required = false) String size,
-        @RequestParam(required = false) Integer maxPrice) {
-        return garments.browse(q, category, size, maxPrice);
+        @RequestParam(required = false) Integer maxPrice,
+        @RequestParam(required = false, defaultValue = "50") Integer limit,
+        @RequestParam(required = false, defaultValue = "0") Integer offset) {
+        return garments.browse(q, category, size, maxPrice, limit, offset);
     }
 
     @GetMapping("/mine")

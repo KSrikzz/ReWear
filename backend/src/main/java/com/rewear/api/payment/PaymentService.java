@@ -48,8 +48,8 @@ public class PaymentService {
         if (!profile.id().equals(String.valueOf(booking.get("customerId")))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the renter can pay for this booking.");
         }
-        if (!"requested".equals(booking.get("bookingStatus"))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Payment is only available for a pending rental request.");
+        if (!"approved".equals(booking.get("bookingStatus"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Payment is only available for an approved rental request.");
         }
         if ("successful".equals(booking.get("status"))) {
             return jdbc.queryForMap("SELECT transaction_id AS \"transactionId\", payment_type AS \"paymentType\", amount, currency, status, payment_method AS \"paymentMethod\", gateway, created_at AS \"createdAt\" FROM payment_transactions WHERE booking_id = :id AND status = 'successful' ORDER BY created_at DESC LIMIT 1", Map.of("id", bookingId));
@@ -60,7 +60,7 @@ public class PaymentService {
         String finalStatus = success ? "successful" : "failed";
         jdbc.update("UPDATE payment_transactions SET status = :status, updated_at = now() WHERE id = :id",
             Map.of("status", finalStatus, "id", paymentId));
-        jdbc.update("UPDATE bookings SET payment_status = :status, status = CASE WHEN :status = 'failed' THEN 'cancelled' ELSE status END, updated_at = now() WHERE id = :id",
+        jdbc.update("UPDATE bookings SET payment_status = :status, status = CASE WHEN :status = 'failed' THEN 'cancelled' WHEN :status = 'successful' THEN 'confirmed' ELSE status END, updated_at = now() WHERE id = :id",
             Map.of("status", finalStatus, "id", bookingId));
         return payment(paymentId);
     }
@@ -108,7 +108,7 @@ public class PaymentService {
         try { booking = jdbc.queryForMap("SELECT customer_id AS \"customerId\", total_payable AS amount, status AS \"bookingStatus\", payment_status AS \"paymentStatus\" FROM bookings WHERE id=:id FOR UPDATE", Map.of("id",bookingId)); }
         catch (org.springframework.dao.EmptyResultDataAccessException missing) { throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Rental request not found."); }
         if (!profile.id().equals(String.valueOf(booking.get("customerId")))) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"Only the renter can cancel checkout.");
-        if (!"requested".equals(booking.get("bookingStatus")) || "successful".equals(booking.get("paymentStatus"))) throw new ResponseStatusException(HttpStatus.CONFLICT,"This checkout can no longer be cancelled.");
+        if (!"approved".equals(booking.get("bookingStatus")) || "successful".equals(booking.get("paymentStatus"))) throw new ResponseStatusException(HttpStatus.CONFLICT,"This checkout can no longer be cancelled.");
         UUID paymentId = insert(profile.id(), bookingId, "RENTAL", (BigDecimal)booking.get("amount"), "wallet", null, "cancelled");
         jdbc.update("UPDATE bookings SET status='cancelled', payment_status='cancelled', cancelled_at=now(), updated_at=now() WHERE id=:id",Map.of("id",bookingId));
         return payment(paymentId);

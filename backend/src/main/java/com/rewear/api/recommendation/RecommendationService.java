@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -47,13 +48,70 @@ public class RecommendationService {
     private final ProfileService profiles;
     private final GarmentService garments;
     private final StylistUnderstandingService stylist;
+    private final MlServiceClient mlServiceClient;
 
     public RecommendationService(NamedParameterJdbcTemplate jdbc, ProfileService profiles,
-                                 GarmentService garments, StylistUnderstandingService stylist) {
+                                 GarmentService garments, StylistUnderstandingService stylist,
+                                 MlServiceClient mlServiceClient) {
         this.jdbc = jdbc;
         this.profiles = profiles;
         this.garments = garments;
         this.stylist = stylist;
+        this.mlServiceClient = mlServiceClient;
+    }
+
+    private Map<String, Double> getMlScores(String query, List<Map<String, Object>> candidates) {
+        if (query == null || query.isBlank() || candidates.isEmpty()) {
+            return null;
+        }
+        
+        List<java.util.UUID> candidateIds = candidates.stream()
+            .map(c -> (java.util.UUID) c.get("id"))
+            .toList();
+            
+        List<Map<String, Object>> embeddings = jdbc.queryForList("""
+            SELECT product_id::text, embedding
+            FROM product_embeddings
+            WHERE model_name = 'all-MiniLM-L6-v2' AND product_id IN (:ids)
+            """, Map.of("ids", candidateIds));
+            
+        if (embeddings.isEmpty()) {
+            return null;
+        }
+
+        List<Map<String, Object>> productEmbeddings = new java.util.ArrayList<>();
+        ObjectMapper mapper = new ObjectMapper();
+        for (Map<String, Object> row : embeddings) {
+            try {
+                String productId = (String) row.get("product_id");
+                Object pgObj = row.get("embedding");
+                String jsonStr = pgObj.toString();
+                
+                List<Double> embeddingList = mapper.readValue(jsonStr, new com.fasterxml.jackson.core.type.TypeReference<List<Double>>() {});
+                productEmbeddings.add(Map.of("product_id", productId, "embedding", embeddingList));
+            } catch (Exception e) {
+                // Ignore parsing errors for individual rows
+            }
+        }
+        
+        if (productEmbeddings.isEmpty()) {
+            return null;
+        }
+        
+        List<Map<String, Object>> mlResults = mlServiceClient.search(query, productEmbeddings, 100);
+        if (mlResults == null) {
+            return null;
+        }
+        
+        Map<String, Double> scores = new HashMap<>();
+        for (Map<String, Object> result : mlResults) {
+            String productId = (String) result.get("product_id");
+            Number score = (Number) result.get("score");
+            if (productId != null && score != null) {
+                scores.put(productId, score.doubleValue());
+            }
+        }
+        return scores;
     }
 
     public Map<String, Object> discover(Jwt jwt, DiscoveryRequest request) {
@@ -125,13 +183,15 @@ public class RecommendationService {
             clean(request.condition()), request.minimumRating(), request.premiumOnly(), 48, 0);
         List<Map<String, Object>> candidates = garments.discoveryCandidates(criteria);
         List<String> queryTerms = queryTerms(request.query(), parsed.keywords());
+        Map<String, Double> mlScores = getMlScores(request.query(), candidates);
         List<Map<String, Object>> ranked = new ArrayList<>();
         for (Map<String, Object> candidate : candidates) {
             Map<String, Object> garment = normalizeGarment(candidate);
             Double distance = distanceKm == null && latitude == null ? null : distanceKm(
                 latitude, longitude, decimalOrNull(garment.get("approximateLatitude")), decimalOrNull(garment.get("approximateLongitude")));
+            Double mlScore = mlScores != null ? mlScores.get((String) garment.get("id")) : null;
             Match match = score(garment, occasion, category, style, colour, size, minimum, maximum, days,
-                rentalStart, fulfilment, distance, distanceKm, preferences, queryTerms, imageData != null, parsed);
+                rentalStart, fulfilment, distance, distanceKm, preferences, queryTerms, imageData != null, parsed, mlScore);
             int estimateDays = days == null ? Math.max(1, integer(garment.get("days"))) : Math.max(1, days);
             BigDecimal estimatedRentalPrice = decimal(garment.get("price"))
                 .multiply(BigDecimal.valueOf(estimateDays))
@@ -319,7 +379,7 @@ public class RecommendationService {
     private Match score(Map<String, Object> garment, String occasion, String category, String style, String colour,
                         String size, BigDecimal minimum, BigDecimal maximum, Integer days, LocalDate rentalStart,
                         String fulfilment, Double distance, Integer radius, Map<String, Object> preferences,
-                        List<String> queryTerms, boolean hasImage, InterpretedQuery interpretation) {
+                        List<String> queryTerms, boolean hasImage, InterpretedQuery interpretation, Double mlScore) {
         List<String> reasons = new ArrayList<>();
         Map<String, Double> factors = new HashMap<>();
         String name = text(garment, "name");
@@ -702,3 +762,5 @@ public class RecommendationService {
 
     private record Match(double score, int percent, List<String> reasons) {}
 }
+
+

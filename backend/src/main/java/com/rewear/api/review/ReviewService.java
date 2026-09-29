@@ -89,8 +89,9 @@ public class ReviewService {
         if (!customerId.toString().equals(booking.get("customerId").toString())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the renter can leave feedback for this booking.");
         }
-        if (!"completed".equals(booking.get("status"))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Feedback is available after the rental is completed.");
+        String status = (String) booking.get("status");
+        if (!"completed".equals(status) && !"return_pending".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Feedback is available after you return the garment.");
         }
         String fit = clean(request.fit());
         String condition = clean(request.condition());
@@ -182,3 +183,4 @@ public class ReviewService {
         return cleaned.isEmpty() ? null : cleaned;
     }
 }
+

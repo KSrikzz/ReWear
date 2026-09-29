@@ -227,12 +227,15 @@ public class BookingService {
         boolean owner = actorId.equals(ownerId);
         boolean customer = actorId.equals(customerId);
         boolean allowed = switch (current) {
-            case "requested" -> (owner && List.of("confirmed", "declined").contains(next)) || (customer && "cancelled".equals(next));
-            case "confirmed" -> (owner && List.of("in_use", "cancelled").contains(next)) || (customer && "cancelled".equals(next));
+            case "requested" -> (owner && List.of("approved", "declined").contains(next)) || (customer && "cancelled".equals(next));
+            case "approved" -> (owner && "cancelled".equals(next)) || (customer && "cancelled".equals(next));
+            case "confirmed" -> (owner && List.of("handover_pending", "cancelled").contains(next)) || (customer && "cancelled".equals(next));
+            case "handover_pending" -> (customer && "in_use".equals(next));
             case "in_use" -> customer && "return_pending".equals(next);
-            case "return_pending" -> owner && "completed".equals(next);
+            case "return_pending" -> owner && List.of("completed", "disputed").contains(next);
             default -> false;
         };
+        // The booking will become 'confirmed' automatically via PaymentService when payment succeeds on an 'approved' request.
         if ("confirmed".equals(next) && Boolean.TRUE.equals(booking.get("paymentRequired"))
             && !"successful".equals(booking.get("paymentStatus"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This rental cannot be confirmed until payment succeeds.");
@@ -240,22 +243,32 @@ public class BookingService {
         boolean highValuePhotosRequired = Boolean.TRUE.equals(booking.get("highValueProtectionRequired"));
         List<String> evidencePaths = photoPaths == null ? List.of() : photoPaths.stream().filter(path -> path != null && path.startsWith(actorId + "/")).limit(5).toList();
         if (photoPaths != null && evidencePaths.size() != photoPaths.size()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Rental evidence photos must be uploaded to your own account folder.");
-        if (highValuePhotosRequired && "in_use".equals(next) && evidencePaths.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add at least one handover photo for this high-value rental.");
+        if (highValuePhotosRequired && "handover_pending".equals(next) && evidencePaths.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add at least one handover photo for this high-value rental.");
         if (highValuePhotosRequired && "return_pending".equals(next) && evidencePaths.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add at least one return photo for this high-value rental.");
         if (!allowed) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This account cannot make that rental status change.");
-        if ("in_use".equals(next) && LocalDate.parse(booking.get("pickupDate").toString()).isAfter(LocalDate.now())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "The rental can be marked in use on or after its pickup date.");
+        if ("handover_pending".equals(next) && LocalDate.parse(booking.get("pickupDate").toString()).isAfter(LocalDate.now())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "The rental can be handed over on or after its pickup date.");
         }
 
         String timestampColumn = switch (next) {
             case "confirmed" -> "confirmed_at";
+            case "approved" -> null;
             case "declined" -> "declined_at";
             case "cancelled" -> "cancelled_at";
             case "in_use" -> "picked_up_at";
             case "return_pending" -> "returned_at";
             case "completed" -> "completed_at";
+            case "handover_pending", "disputed" -> null;
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That rental status is not supported.");
         };
+        
+        if ("cancelled".equals(next) && "confirmed".equals(current)) {
+            BigDecimal amount = (BigDecimal) booking.get("totalPayable");
+            jdbc.update("INSERT INTO payment_transactions (id, user_id, booking_id, payment_type, amount, currency, status, payment_method, gateway, created_at, updated_at) " +
+                        "VALUES (gen_random_uuid(), :uid, :bid, 'REFUND', :amt, 'INR', 'successful', 'wallet', 'internal', now(), now())",
+                        Map.of("uid", customerId, "bid", bookingId, "amt", amount));
+            jdbc.update("UPDATE bookings SET payment_status = 'refunded' WHERE id = :id", Map.of("id", bookingId));
+        }
 
         if ("completed".equals(next) && List.of("personal", "business").contains(booking.get("ownerType"))) {
             BigDecimal gross = (BigDecimal) booking.get("rentalPrice");
@@ -273,10 +286,11 @@ public class BookingService {
                 ON CONFLICT (booking_id) DO NOTHING
                 """, Map.of("bookingId", bookingId, "ownerId", ownerId, "gross", gross, "rate", rate, "fee", fee, "net", net));
         } else {
-            String photoColumn = "in_use".equals(next) ? ", handover_photo_paths = :photos" : "return_pending".equals(next) ? ", return_photo_paths = :photos" : "";
+            String photoColumn = "handover_pending".equals(next) ? ", handover_photo_paths = :photos" : "return_pending".equals(next) ? ", return_photo_paths = :photos" : "";
             MapSqlParameterSource transitionParams = new MapSqlParameterSource().addValue("status", next).addValue("id", bookingId);
-            if ("in_use".equals(next) || "return_pending".equals(next)) transitionParams.addValue("photos", evidencePaths.toArray(String[]::new));
-            jdbc.update("UPDATE bookings SET status = :status, updated_at = now(), " + timestampColumn + " = now() " + photoColumn + " WHERE id = :id", transitionParams);
+            if ("handover_pending".equals(next) || "return_pending".equals(next)) transitionParams.addValue("photos", evidencePaths.toArray(String[]::new));
+            String timeSet = timestampColumn != null ? ", " + timestampColumn + " = now() " : " ";
+            jdbc.update("UPDATE bookings SET status = :status, updated_at = now()" + timeSet + photoColumn + " WHERE id = :id", transitionParams);
         }
         addEvent(bookingId, actorId, actor.name(), actor.role(), next);
         return withEvents(one(bookingId));
@@ -322,3 +336,4 @@ public class BookingService {
         return value == null ? "" : value.replaceAll("[^A-Za-z0-9]", "").toUpperCase(java.util.Locale.ROOT);
     }
 }
+

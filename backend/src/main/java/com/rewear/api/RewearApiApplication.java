@@ -7,8 +7,11 @@ import org.springframework.context.annotation.Bean;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.springframework.scheduling.annotation.EnableScheduling;
+
 @SpringBootApplication
 @ConfigurationPropertiesScan
+@EnableScheduling
 public class RewearApiApplication {
     @Bean
     ObjectMapper objectMapper() {

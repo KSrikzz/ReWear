@@ -34,4 +34,7 @@ public class AdminController {
     @PatchMapping("/claims/{id}") public Map<String, Object> decide(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id, @Valid @RequestBody ClaimDecision decision) {
         return admin.decide(jwt, id, decision);
     }
+    @PatchMapping("/rentals/{id}/resolve") public Map<String, Object> resolveDispute(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id, @RequestBody Map<String, String> payload) {
+        return admin.resolveDispute(jwt, id, payload.getOrDefault("resolution", "completed"));
+    }
 }
