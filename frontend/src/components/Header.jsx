@@ -27,8 +27,7 @@ export default function Header() {
   
   const navItems = business
     ? [
-        { to: '/business', label: 'Business studio' }, 
-        { to: '/browse', label: 'Browse & rent' }
+        { to: '/business', label: 'Business studio' }
       ]
     : admin 
       ? [
@@ -38,7 +37,6 @@ export default function Header() {
         ? [
             { to: '/', label: 'Explore' },
             { to: '/ai-outfit-discovery', label: 'AI Outfit Discovery', icon: Sparkles, highlight: true },
-            { to: '/how-it-works', label: 'How it works' },
             { to: '/my-closet', label: 'My closet' },
           ]
         : []
@@ -60,14 +58,12 @@ export default function Header() {
                 className="flex flex-col text-left group cursor-pointer"
                 aria-label="ReWear home"
               >
-                <div className="flex items-center gap-1.5">
-                  <span className="font-serif-couture text-2xl sm:text-3xl font-black tracking-tight text-[#18212B] group-hover:text-[#781F37] transition-colors">
-                    ReWear
-                  </span>
-                  <span className="w-2 h-2 rounded-full bg-[#197B5B]" title="Hyperlocal verified circular fashion" />
+                <div className="flex items-center gap-2">
+                  <img src="/logo-r.png" alt="ReWear Logo" className="h-8 sm:h-10 object-contain" />
+                  <img src="/brand-text.png" alt="ReWear" className="h-6 sm:h-8 object-contain" />
                   {business && <span className="ml-2 text-[10px] bg-stone-200 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Business</span>}
                 </div>
-                <span className="text-[10px] tracking-wider uppercase font-semibold text-[#6F747A] hidden sm:block">
+                <span className="text-[10px] tracking-wider uppercase font-semibold text-[#6F747A] hidden sm:block mt-1">
                   Wear the moment. Not the price tag.
                 </span>
               </Link>
@@ -230,3 +226,4 @@ export default function Header() {
     </>
   )
 }
+

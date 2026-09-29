@@ -15,7 +15,7 @@ export default function SellerHub() {
   
   const activeListings = myListings.filter((item) => item.available)
   const pendingRequests = incomingBookings.filter((item) => item.status === 'requested')
-  const rentalsInUse = incomingBookings.filter((item) => item.status === 'in_use')
+  const rentalsInUse = incomingBookings.filter((item) => ['in_use', 'handover_pending'].includes(item.status))
   const returnsWaiting = incomingBookings.filter((item) => item.status === 'return_pending')
   
   const [editingListingId, setEditingListingId] = useSessionDraft(`rewear:${account.id}:editing-listing`, null)
@@ -90,7 +90,7 @@ export default function SellerHub() {
               <p className="text-sm text-[#6F747A] mt-1">Confirm requests, record handover, and close a rental after the return.</p>
             </div>
             <span className="px-3 py-1 bg-amber-50 text-[#C89228] border border-amber-200 rounded-full text-xs font-bold">
-              <strong>{incomingBookings.filter((item) => ['requested', 'return_pending'].includes(item.status)).length}</strong> need attention
+              <strong>{incomingBookings.filter((item) => ['requested', 'confirmed', 'return_pending'].includes(item.status)).length}</strong> need attention
             </span>
           </div>
           
@@ -132,7 +132,12 @@ export default function SellerHub() {
                       <ProductActivitySummary garment={listing} reviews={reviews} />
                       <GarmentLifecycleControls garment={listing} onUpdate={updateGarmentLifecycle} />
                       <div className="flex flex-wrap gap-3 pt-4 border-t border-[#E8E1D8]">
-                        <button className="text-sm font-bold text-[#18212B] hover:underline" type="button" onClick={() => setEditingListingId(String(listing.id))}>Edit listing</button>
+                        <button className="text-sm font-bold text-[#18212B] hover:underline" type="button" onClick={() => {
+                          setEditingListingId(String(listing.id))
+                          setTimeout(() => {
+                            document.getElementById('business-inventory-form')?.scrollIntoView({ behavior: 'smooth' })
+                          }, 50)
+                        }}>Edit listing</button>
                         {!listing.retired && !listing.underMaintenance && (
                           <button className="text-sm font-bold text-[#18212B] hover:underline" type="button" onClick={() => toggleListing(listing.id)}>
                             {listing.available ? 'Pause listing' : 'Make available'}

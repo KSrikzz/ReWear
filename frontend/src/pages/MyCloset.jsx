@@ -18,7 +18,7 @@ export default function MyCloset() {
   const myBookings = useMemo(() => bookings.filter((item) => String(item.customerId) === String(account.id)), [bookings, account.id])
   const incomingBookings = useMemo(() => bookings.filter((item) => String(item.ownerId || '') === String(account.id)), [bookings, account.id])
   
-  const activeRentals = myBookings.filter((item) => ['confirmed', 'in_use', 'return_pending'].includes(item.status))
+  const activeRentals = myBookings.filter((item) => ['confirmed', 'handover_pending', 'in_use', 'return_pending'].includes(item.status))
   const pendingReviewCount = myBookings.filter((item) => item.status === 'completed' && !reviews.some((review) => review.bookingId === item.id)).length
 
   async function saveListing(listing) {

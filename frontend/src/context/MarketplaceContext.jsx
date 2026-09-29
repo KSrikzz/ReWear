@@ -70,6 +70,7 @@ export function MarketplaceProvider({ children }) {
   const [account, setAccount] = useState(null)
   const [listings, setListings] = useState([])
   const [publicGarments, setPublicGarments] = useState([])
+  const [hasMoreGarments, setHasMoreGarments] = useState(true)
   const [bookings, setBookings] = useState([])
   const [reviews, setReviews] = useState([])
   const [savedGarmentIds, setSavedGarmentIds] = useState([])
@@ -90,11 +91,29 @@ export function MarketplaceProvider({ children }) {
     const revision = ++searchRevision.current
     const query = new URLSearchParams()
     if (searchQuery.trim()) query.set('q', searchQuery.trim())
-    const path = `/api/garments${query.size ? `?${query.toString()}` : ''}`
+    query.set('limit', '20')
+    query.set('offset', '0')
+    const path = `/api/garments?${query.toString()}`
     const result = await apiRequest(path)
-    if (revision === searchRevision.current) setPublicGarments(result)
+    if (revision === searchRevision.current) {
+      setPublicGarments(result)
+      setHasMoreGarments(result.length === 20)
+    }
     return result
   }, [searchQuery])
+
+  const loadMoreGarments = useCallback(async () => {
+    if (!hasMoreGarments) return
+    const query = new URLSearchParams()
+    if (searchQuery.trim()) query.set('q', searchQuery.trim())
+    query.set('limit', '20')
+    query.set('offset', publicGarments.length.toString())
+    const path = `/api/garments?${query.toString()}`
+    const result = await apiRequest(path)
+    setPublicGarments((prev) => [...prev, ...result])
+    setHasMoreGarments(result.length === 20)
+    return result
+  }, [searchQuery, publicGarments.length, hasMoreGarments])
 
   const applySession = useCallback(async (session) => {
     const revision = ++sessionRevision.current
@@ -199,6 +218,8 @@ export function MarketplaceProvider({ children }) {
       listingsWithInsights: listings,
       publicGarments,
       allGarments,
+      hasMoreGarments,
+      loadMoreGarments,
       bookings,
       reviews,
       savedGarmentIds,
@@ -386,7 +407,7 @@ export function MarketplaceProvider({ children }) {
         })
         setPayments((current) => [payment, ...current])
         setBookings((current) => current.map((booking) => String(booking.id) === String(bookingId)
-          ? { ...booking, paymentStatus: payment.status, status: payment.status === 'failed' ? 'cancelled' : booking.status }
+          ? { ...booking, paymentStatus: payment.status, status: payment.status === 'failed' ? 'cancelled' : (payment.status === 'successful' ? 'confirmed' : booking.status) }
           : booking))
         return payment
       },
@@ -473,3 +494,4 @@ export function MarketplaceProvider({ children }) {
 
   return <MarketplaceContext.Provider value={value}>{children}</MarketplaceContext.Provider>
 }
+

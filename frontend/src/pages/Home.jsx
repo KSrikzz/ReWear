@@ -3,41 +3,67 @@ import { OCCASIONS, HERO_IMAGES } from '../data/garments'
 import GarmentCard from '../components/GarmentCard'
 import { useMarketplace } from '../context/useMarketplace'
 import { useSessionDraft } from '../hooks/useSessionDraft'
-import { Sparkles, MapPin, Search, Calendar, ChevronRight, ArrowRight, ShieldCheck, Shirt, RefreshCw } from 'lucide-react'
+import { Sparkles, MapPin, Search, Calendar, ChevronRight, ShieldCheck, Shirt, RefreshCw } from 'lucide-react'
+import AreaAutocomplete from '../components/AreaAutocomplete'
+
+const WOMENS_CATEGORIES = [
+  "Office blazer and trouser set", "Single blazer", "Cocktail dress", "Evening gown", 
+  "Floral maxi dress", "Midi dress", "Jumpsuit", "Co-ord set", "Kurta and trouser set", 
+  "Anarkali suit", "Sharara set", "Lehenga", "Saree with blouse", "Lightweight cotton saree", 
+  "Indo-Western dress", "Winter coat"
+];
+
+const MENS_CATEGORIES = [
+  "Office blazer", "Three-piece suit", "Tuxedo", "Wedding sherwani", "Bandhgala jacket", 
+  "Nehru jacket and kurta", "Kurta pajama set", "Indo-Western set", "Waistcoat set", 
+  "Dinner jacket", "Casual jacket", "Overcoat", "Formal shirt and trousers", 
+  "Wedding suit in a light color", "Festival jacket"
+];
+
+const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "Free Size"];
 
 export default function Home() {
-  const { account, allGarments, searchQuery, setSearchQuery, selectedArea, savedGarmentIds = [] } = useMarketplace()
+  const { account, allGarments, hasMoreGarments, loadMoreGarments, searchQuery, setSearchQuery, selectedArea, savedGarmentIds = [] } = useMarketplace()
   const [searchParams, setSearchParams] = useSearchParams()
   const savedOnly = searchParams.get('filter') === 'saved'
   const homeDraftKey = `rewear:${account?.id || 'guest'}:explore`
   
   const [activeFilter, setActiveFilter] = useSessionDraft(`${homeDraftKey}:category`, 'All')
+  const [subCategory, setSubCategory] = useSessionDraft(`${homeDraftKey}:subCategory`, '')
   const [maxPrice, setMaxPrice] = useSessionDraft(`${homeDraftKey}:max-price`, '')
   const [sizeFilter, setSizeFilter] = useSessionDraft(`${homeDraftKey}:size`, '')
   const [areaFilter, setAreaFilter] = useSessionDraft(`${homeDraftKey}:area`, '')
   const [occasionFilter, setOccasionFilter] = useSessionDraft(`${homeDraftKey}:occasion`, '')
+  const [aiQuery, setAiQuery] = useSessionDraft(`${homeDraftKey}:aiQuery`, '')
+  const navigate = require('react-router-dom').useNavigate();
   
   const availableCount = allGarments.filter((garment) => garment.available !== false && garment.ownerId !== account?.id).length
   const completedRentalCount = allGarments.reduce((total, garment) => total + Number(garment.completedRentals || 0), 0)
   const reviewedListingCount = allGarments.filter((garment) => Number(garment.reviewCount || 0) > 0).length
-  const filters = ['All', "Women's Gowns", 'Lehengas', 'Suits & Sherwanis', 'Sarees']
+  const filters = ['All', "Women's", "Men's"]
   
   const filteredGarments = allGarments.filter((garment) => {
     if (garment.available === false || garment.ownerId === account?.id) return false
     const category = `${garment.category || ''} ${garment.name}`.toLowerCase()
-    const matchesFilter = activeFilter === 'All'
-      || (activeFilter === "Women's Gowns" && /gown|dress|anarkali/.test(category))
-      || (activeFilter === 'Lehengas' && /lehenga/.test(category))
-      || (activeFilter === 'Suits & Sherwanis' && /suit|sherwani|tux/.test(category))
-      || (activeFilter === 'Sarees' && /saree|sari/.test(category))
+    
+    // Check main category
+    const isWomens = WOMENS_CATEGORIES.some(c => category.includes(c.toLowerCase()));
+    const isMens = MENS_CATEGORIES.some(c => category.includes(c.toLowerCase()));
+    
+    let matchesMainCategory = activeFilter === 'All';
+    if (activeFilter === "Women's") matchesMainCategory = isWomens || category.includes('women');
+    if (activeFilter === "Men's") matchesMainCategory = isMens || category.includes('men');
+
+    const matchesSubCategory = !subCategory || category.includes(subCategory.toLowerCase());
+    
     const matchesOccasion = !occasionFilter || category.includes(occasionFilter)
     const searchableText = `${garment.name} ${garment.designer} ${garment.category || ''} ${garment.distance} ${garment.size}`.toLowerCase()
     const matchesBudget = !maxPrice || Number(garment.price) <= Number(maxPrice)
-    const matchesSize = !sizeFilter || String(garment.size || '').toLowerCase().includes(sizeFilter.trim().toLowerCase())
+    const matchesSize = !sizeFilter || String(garment.size || '').split(',').map(s => s.trim().toLowerCase()).includes(sizeFilter.toLowerCase())
     const matchesArea = (!areaFilter || String(garment.distance || '').toLowerCase().includes(areaFilter.trim().toLowerCase()))
       && (!selectedArea || String(garment.distance || '').toLowerCase().includes(selectedArea.trim().toLowerCase()))
     const matchesSaved = !savedOnly || savedGarmentIds.includes(String(garment.id))
-    return matchesFilter && matchesOccasion && matchesBudget && matchesSize && matchesArea && matchesSaved && searchableText.includes(searchQuery.trim().toLowerCase())
+    return matchesMainCategory && matchesSubCategory && matchesOccasion && matchesBudget && matchesSize && matchesArea && matchesSaved && searchableText.includes(searchQuery.trim().toLowerCase())
   })
 
   const scrollToTrending = (e) => {
@@ -108,7 +134,7 @@ export default function Home() {
             </div>
             
             {/* Right Gallery (ReWear style collage) */}
-            <div className="relative h-[600px] hidden lg:block">
+            <div className="relative h-[600px] hidden xl:block">
               {/* Main Portrait */}
               <div className="absolute right-12 top-0 w-[400px] h-[520px] rounded-2xl overflow-hidden shadow-2xl z-10 border-4 border-white transform rotate-2 hover:rotate-0 transition duration-500">
                 <img src={HERO_IMAGES.main} alt="Heritage Revival editorial fashion" className="w-full h-full object-cover" />
@@ -143,8 +169,32 @@ export default function Home() {
       {/* ===== SMART SEARCH DOCK ===== */}
       <section className="relative z-20 -mt-10 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="bg-white rounded-3xl p-6 shadow-xl border border-[#E8E1D8]">
-          <form onSubmit={scrollToTrending} className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 focus-within:border-[#781F37] focus-within:ring-1 focus-within:ring-[#781F37] transition">
+          
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              let url = '/ai-outfit-discovery?';
+              if (aiQuery) url += `query=${encodeURIComponent(aiQuery)}&`;
+              if (occasionFilter) url += `occasion=${encodeURIComponent(occasionFilter)}&`;
+              if (areaFilter) url += `area=${encodeURIComponent(areaFilter)}`;
+              navigate(url);
+            }} className="flex flex-col gap-4">
+              <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 focus-within:border-[#781F37] focus-within:ring-1 focus-within:ring-[#781F37] transition">
+                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-[#6F747A] mb-2">
+                  <Sparkles className="w-3.5 h-3.5 text-[#781F37]" /> Tell your stylist (AI Outfit Discovery)
+                </label>
+                <div className="text-lg font-serif-couture text-[#18212B] mb-2">Describe your outfit in your own words.</div>
+                <input 
+                  type="text" 
+                  value={aiQuery}
+                  onChange={(e) => setAiQuery(e.target.value)}
+                  placeholder="I need a classy black blazer for an interview in Chennai under ₹1000 next Monday."
+                  className="w-full bg-transparent text-sm font-semibold text-[#18212B] outline-none"
+                />
+                <div className="text-[10px] text-stone-500 mt-2">AI can turn your request into editable filters. If AI is unavailable, ReWear uses built-in search interpretation.</div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+
+            <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 focus-within:border-[#781F37] focus-within:ring-1 focus-within:ring-[#781F37] transition md:col-span-3">
               <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-[#6F747A] mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-[#781F37]" /> Occasion
               </label>
@@ -162,30 +212,31 @@ export default function Home() {
               </select>
             </div>
             
-            <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 focus-within:border-[#781F37] focus-within:ring-1 focus-within:ring-[#781F37] transition">
+            <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 focus-within:border-[#781F37] focus-within:ring-1 focus-within:ring-[#781F37] transition md:col-span-4">
               <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-[#6F747A] mb-2">
                 <MapPin className="w-3.5 h-3.5 text-[#197B5B]" /> Pickup Area
               </label>
-              <input 
-                value={areaFilter} 
-                onChange={(e) => setAreaFilter(e.target.value)}
+              <AreaAutocomplete
+                value={areaFilter}
+                onChange={setAreaFilter}
                 placeholder="Any neighborhood"
-                className="w-full bg-transparent text-sm font-semibold text-[#18212B] outline-none placeholder:font-normal placeholder:text-stone-400"
+                className="w-full bg-transparent text-sm font-semibold text-[#18212B] outline-none placeholder:font-normal placeholder:text-stone-400 text-ellipsis overflow-hidden whitespace-nowrap"
               />
             </div>
             
-            <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 opacity-60">
+            <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 opacity-60 md:col-span-3">
               <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-[#6F747A] mb-2">
                 <Calendar className="w-3.5 h-3.5 text-[#C89228]" /> Rental Dates
               </label>
               <div className="text-sm font-medium text-stone-500">Choose on listing</div>
             </div>
             
-            <button type="submit" className="bg-[#18212B] hover:bg-[#781F37] text-white rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition shadow-md h-full min-h-[64px]">
-              <Search className="w-4 h-4" />
-              Find Racks
-            </button>
-          </form>
+            <button type="submit" className="bg-[#18212B] hover:bg-[#781F37] text-white rounded-2xl flex items-center justify-center gap-2 text-sm font-bold transition shadow-md h-full min-h-[64px] md:col-span-2">
+                <Search className="w-4 h-4" />
+                Find Racks
+              </button>
+              </div>
+            </form>
 
           {/* Quick Chips */}
           <div className="mt-6 pt-6 border-t border-stone-100 flex flex-wrap items-center gap-3">
@@ -250,7 +301,15 @@ export default function Home() {
                   occ.span === 7 ? 'md:col-span-7' : 'md:col-span-5'
                 }`}
                 onClick={() => {
-                  setActiveFilter(occ.filter)
+                  let newActive = 'All';
+                  let newSub = '';
+                  if (occ.filter === "Women's Gowns") { newActive = "Women's"; newSub = "gown"; }
+                  else if (occ.filter === "Lehengas") { newActive = "Women's"; newSub = "lehenga"; }
+                  else if (occ.filter === "Suits & Sherwanis") { newActive = "Men's"; newSub = "suit"; }
+                  else if (occ.filter === "Sarees") { newActive = "Women's"; newSub = "saree"; }
+                  
+                  setActiveFilter(newActive)
+                  setSubCategory(newSub)
                   scrollToTrending()
                 }}
               >
@@ -278,7 +337,7 @@ export default function Home() {
       </section>
 
       {/* ===== TRENDING NEARBY ===== */}
-      <section id="trending-section" className="py-24 bg-stone-50">
+      <section id="trending-section" className="py-24 bg-stone-50 scroll-mt-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-8 mb-12">
@@ -293,7 +352,7 @@ export default function Home() {
               {filters.map((f) => (
                 <button
                   key={f}
-                  onClick={() => setActiveFilter(f)}
+                  onClick={() => { setActiveFilter(f); setSubCategory(''); }}
                   className={`px-4 py-2 rounded-full text-sm transition-all ${
                     activeFilter === f 
                       ? 'bg-white text-[#18212B] font-bold shadow-sm border border-stone-200' 
@@ -308,6 +367,21 @@ export default function Home() {
 
           {/* Inline Filters */}
           <div className="flex flex-wrap items-center gap-4 mb-10 bg-white p-4 rounded-2xl border border-stone-200 shadow-sm">
+            {(activeFilter === "Women's" || activeFilter === "Men's") && (
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-[#6F747A] uppercase tracking-wider ml-2">Category</span>
+                <select
+                  value={subCategory}
+                  onChange={(e) => setSubCategory(e.target.value)}
+                  className="bg-stone-50 border border-stone-200 rounded-xl px-4 py-2 text-sm font-semibold outline-none focus:ring-1 focus:ring-[#781F37]"
+                >
+                  <option value="">All Categories</option>
+                  {(activeFilter === "Women's" ? WOMENS_CATEGORIES : MENS_CATEGORIES).map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex items-center gap-3">
               <span className="text-xs font-bold text-[#6F747A] uppercase tracking-wider ml-2">Budget</span>
               <select 
@@ -324,21 +398,27 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-3">
               <span className="text-xs font-bold text-[#6F747A] uppercase tracking-wider">Size</span>
-              <input 
+              <select 
                 value={sizeFilter} 
                 onChange={(e) => setSizeFilter(e.target.value)} 
-                placeholder="Any size" 
-                className="w-32 bg-stone-50 border border-stone-200 rounded-xl px-4 py-2 text-sm font-semibold outline-none focus:ring-1 focus:ring-[#781F37] placeholder:font-normal" 
-              />
+                className="bg-stone-50 border border-stone-200 rounded-xl px-4 py-2 text-sm font-semibold outline-none focus:ring-1 focus:ring-[#781F37]"
+              >
+                <option value="">Any size</option>
+                {SIZES.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-xs font-bold text-[#6F747A] uppercase tracking-wider">Area</span>
-              <input 
-                value={areaFilter} 
-                onChange={(e) => setAreaFilter(e.target.value)} 
-                placeholder="Any neighborhood" 
-                className="w-48 bg-stone-50 border border-stone-200 rounded-xl px-4 py-2 text-sm font-semibold outline-none focus:ring-1 focus:ring-[#781F37] placeholder:font-normal" 
-              />
+              <div className="w-48">
+                <AreaAutocomplete
+                  value={areaFilter}
+                  onChange={setAreaFilter}
+                  placeholder="Any neighborhood"
+                  className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-2 text-sm font-semibold outline-none focus:ring-1 focus:ring-[#781F37] placeholder:font-normal"
+                />
+              </div>
             </div>
           </div>
 
@@ -347,6 +427,17 @@ export default function Home() {
               <GarmentCard key={g.id} garment={g} />
             ))}
           </div>
+
+          {hasMoreGarments && (
+            <div className="mt-12 flex justify-center">
+              <button
+                onClick={loadMoreGarments}
+                className="px-8 py-3 bg-white border border-[#E8E1D8] text-[#18212B] font-bold rounded-xl shadow-sm hover:bg-stone-50 transition"
+              >
+                Load more listings
+              </button>
+            </div>
+          )}
 
           {filteredGarments.length === 0 && (
             <div className="py-20 text-center bg-white rounded-3xl border border-stone-200 shadow-sm mt-6">
@@ -363,7 +454,7 @@ export default function Home() {
                 </Link>
               ) : (
                 <button 
-                  onClick={() => { setSearchQuery(''); setActiveFilter('All'); setMaxPrice(''); setSizeFilter(''); setAreaFilter(''); setOccasionFilter(''); setSearchParams({}) }}
+                  onClick={() => { setSearchQuery(''); setActiveFilter('All'); setSubCategory(''); setMaxPrice(''); setSizeFilter(''); setAreaFilter(''); setOccasionFilter(''); setSearchParams({}) }}
                   className="bg-[#18212B] text-white px-6 py-2.5 rounded-xl font-semibold shadow-sm hover:bg-[#2A3441] transition"
                 >
                   Clear all filters
@@ -392,6 +483,9 @@ export default function Home() {
           </Link>
         </div>
       </section>
+      
+      
     </div>
   )
 }
+

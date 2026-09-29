@@ -12,6 +12,7 @@ import Login from './pages/Login'
 import MyCloset from './pages/MyCloset'
 import Profile from './pages/Profile'
 import AdminDashboard from './pages/AdminDashboard'
+import ScrollToTop from './components/ScrollToTop'
 import { MarketplaceProvider } from './context/MarketplaceContext'
 import { useMarketplace } from './context/useMarketplace'
 
@@ -29,6 +30,7 @@ function HomeRoute() {
   if (!account) return <Navigate to="/login" replace />
   if (account.role === 'admin') return <Navigate to="/admin" replace />
   if (account.role === 'business') return <Navigate to="/business" replace />
+  if (account.role === 'business') return <Navigate to="/business" replace />
   return <Home />
 }
 
@@ -37,6 +39,7 @@ function SignedInRoute({ children }) {
   if (isLoading) return <div className="auth-loading" role="status">Loading your ReWear space…</div>
   if (!account) return <Navigate to="/login" replace />
   if (account.role === 'admin') return <Navigate to="/admin" replace />
+  if (account.role === 'business') return <Navigate to="/business" replace />
   return children
 }
 
@@ -127,6 +130,7 @@ function App() {
   return (
     <MarketplaceProvider>
       <BrowserRouter>
+        <ScrollToTop />
         <AppRoutes />
       </BrowserRouter>
     </MarketplaceProvider>
@@ -134,3 +138,4 @@ function App() {
 }
 
 export default App
+

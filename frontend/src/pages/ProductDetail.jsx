@@ -5,9 +5,9 @@ import { useMarketplace } from '../context/useMarketplace'
 import { clearSessionDraft, useSessionDraft } from '../hooks/useSessionDraft'
 import { apiRequest } from '../lib/api'
 import { storageBucket, supabase } from '../lib/supabase'
-import PaymentModal from '../components/PaymentModal'
 import GarmentPassportModal from '../components/GarmentPassportModal'
-import { MapPin, ChevronRight, Shirt, ShieldCheck, Send, ThumbsUp, Calendar, CreditCard, QrCode, ArrowRight } from 'lucide-react'
+import AIFitPreviewModal from '../components/AIFitPreviewModal'
+import { MapPin, ChevronRight, ShieldCheck, Send, ThumbsUp, Calendar, CreditCard, QrCode, ArrowRight, Sparkles } from 'lucide-react'
 
 function inputDate(date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -28,7 +28,7 @@ function displayDate(dateValue) {
 
 export default function ProductDetail() {
   const { id } = useParams()
-  const { account, allGarments, requestRental, payRental, cancelRentalCheckout } = useMarketplace()
+  const { account, allGarments, requestRental } = useMarketplace()
   const navigate = useNavigate()
   const garment = allGarments.find((item) => item.id === id) || allGarments[0]
   const availableSizes = useMemo(() => String(garment.size || '').split(',').map((size) => size.trim()).filter(Boolean), [garment.size])
@@ -46,10 +46,9 @@ export default function ProductDetail() {
   const [selectedSize, setSelectedSize] = useSessionDraft(`${productDraftKey}:size`, '')
   const [requestError, setRequestError] = useState('')
   const [rentalProtection, setRentalProtection] = useSessionDraft(`${productDraftKey}:protection`, false)
-  const [pendingBooking, setPendingBooking] = useState(null)
-  const [paymentComplete, setPaymentComplete] = useState(false)
-  const [protectionTerms, setProtectionTerms] = useState(null)
+    const [protectionTerms, setProtectionTerms] = useState(null)
   const [passportOpen, setPassportOpen] = useState(false)
+  const [aiFitOpen, setAiFitOpen] = useState(false)
   const [pickupDate, setPickupDate] = useSessionDraft(`${productDraftKey}:pickup-date`, today)
 
   useEffect(() => {
@@ -114,8 +113,9 @@ export default function ProductDetail() {
     if (!canProcessRequest || isOwnListing || garment.available === false || !selectedSize || !dateIsValid || !fulfilmentOptions.length || (fulfilment === 'delivery' && !deliveryPinIsValid)) return
     setRequestError('')
     try {
-      const booking = await requestRental(garment, { rentalPrice: rentalFee, estimatedTotal: total, pickupDate, returnDate, duration, fulfilment, deliveryPostcode, selectedSize, rentalProtection })
-      setPendingBooking(booking)
+      await requestRental(garment, { rentalPrice: rentalFee, estimatedTotal: total, pickupDate, returnDate, duration, fulfilment, deliveryPostcode, selectedSize, rentalProtection })
+      clearSessionDraft(`${productDraftKey}:fulfilment`); clearSessionDraft(`${productDraftKey}:postcode`); clearSessionDraft(`${productDraftKey}:duration`); clearSessionDraft(`${productDraftKey}:size`); clearSessionDraft(`${productDraftKey}:pickup-date`); clearSessionDraft(`${productDraftKey}:protection`)
+      navigate(account?.role === 'business' ? '/business' : '/my-closet')
     } catch (error) {
       setRequestError(error.message || 'This rental request could not be saved.')
     }
@@ -163,35 +163,24 @@ export default function ProductDetail() {
             </div>
 
             {/* Image Gallery */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="md:col-span-2 rounded-2xl overflow-hidden aspect-[3/4] relative shadow-lg border border-[#E8E1D8]">
-                <img src={garment.image || PRODUCT_IMAGES.main} alt={garment.name} className="w-full h-full object-cover" />
-                <div className="absolute top-4 left-4 flex flex-col gap-2">
-                  <span className="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
-                    <span className="w-2 h-2 rounded-full bg-[#197B5B]" /> {garment.condition || 'Excellent condition'}
-                  </span>
-                  <span className="bg-[#781F37] text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
-                    <MapPin className="w-3 h-3" /> {garment.distance || 'Nearby'}
-                  </span>
-                </div>
-                <div className="absolute bottom-4 left-4 right-4 bg-white/90 backdrop-blur-md p-4 rounded-xl shadow-lg flex justify-between items-center">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider font-bold text-[#6F747A]">Retail Value</p>
-                    <p className="text-lg font-bold text-[#18212B] line-through">₹{Number(garment.mrp || 0).toLocaleString('en-IN')}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[10px] uppercase tracking-wider font-bold text-[#197B5B]">{duration}-Day Rental</p>
-                    <p className="text-2xl font-black text-[#781F37]">₹{rentalFee.toLocaleString('en-IN')}</p>
-                  </div>
-                </div>
+            <div className="max-w-2xl mx-auto rounded-2xl overflow-hidden aspect-[3/4] sm:aspect-square md:aspect-[4/5] relative shadow-lg border border-[#E8E1D8]">
+              <img src={garment.image || PRODUCT_IMAGES.main} alt={garment.name} className="w-full h-full object-cover" />
+              <div className="absolute top-4 left-4 flex flex-col gap-2">
+                <span className="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-[#197B5B]" /> {garment.condition || 'Excellent condition'}
+                </span>
+                <span className="bg-[#781F37] text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                  <MapPin className="w-3 h-3" /> {garment.distance || 'Nearby'}
+                </span>
               </div>
-              <div className="flex flex-col gap-6">
-                <div className="bg-white rounded-2xl border border-[#E8E1D8] p-5 shadow-sm flex-1">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Shirt className="w-5 h-5 text-[#197B5B]" />
-                    <strong className="text-sm text-[#18212B]">Care and handover</strong>
-                  </div>
-                  <p className="text-sm text-[#6F747A] leading-relaxed">{garment.careInstructions || 'The provider has not added care or handover notes for this piece yet.'}</p>
+              <div className="absolute bottom-4 left-4 right-4 bg-white/90 backdrop-blur-md p-4 rounded-xl shadow-lg flex justify-between items-center">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider font-bold text-[#6F747A]">Retail Value</p>
+                  <p className="text-lg font-bold text-[#18212B] line-through">₹{Number(garment.mrp || 0).toLocaleString('en-IN')}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] uppercase tracking-wider font-bold text-[#197B5B]">{duration}-Day Rental</p>
+                  <p className="text-2xl font-black text-[#781F37]">₹{rentalFee.toLocaleString('en-IN')}</p>
                 </div>
               </div>
             </div>
@@ -204,12 +193,20 @@ export default function ProductDetail() {
                 { label: 'Rental price', value: `₹${Number(garment.price).toLocaleString('en-IN')} / day`, sub: `${duration}-day estimate ₹${rentalFee.toLocaleString('en-IN')}`, color: 'text-[#781F37]' },
                 { label: 'Pickup area', value: garment.distance || 'Nearby', sub: garment.ownerName || garment.designer, color: 'text-[#197B5B]' },
               ].map((s) => (
-                <div key={s.label} className="bg-white p-4 rounded-2xl border border-[#E8E1D8] shadow-sm">
+                <div key={s.label} className="bg-white p-4 rounded-2xl border border-[#E8E1D8] shadow-sm flex flex-col justify-center">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#6F747A] block">{s.label}</span>
                   <span className={`text-lg font-bold block mt-1 ${s.color || 'text-[#18212B]'}`}>{s.value}</span>
-                  <span className={`text-xs block mt-0.5 ${s.color ? s.color + ' font-semibold' : 'text-[#6F747A]'}`}>{s.sub}</span>
+                  <span className={`text-xs block mt-1 line-clamp-2 ${s.color ? s.color + ' font-semibold' : 'text-[#6F747A]'}`} title={s.sub}>{s.sub}</span>
                 </div>
               ))}
+            </div>
+
+            {/* Care and Handover */}
+            <div className="bg-white p-6 rounded-2xl border border-[#E8E1D8] shadow-sm">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-[#197B5B] mb-2 flex items-center gap-2">
+                Care and handover
+              </div>
+              <p className="text-sm text-[#18212B] leading-relaxed">{garment.careInstructions || 'The provider has not added care or handover notes for this piece yet.'}</p>
             </div>
 
             {garment.description && (
@@ -313,7 +310,12 @@ export default function ProductDetail() {
               {!canProcessRequest && <p className="text-sm text-[#D89022] bg-[#D89022]/10 p-3 rounded-xl border border-[#D89022]/20">This sample listing has no connected seller account, so requests cannot be accepted. Choose a seller-owned listing to book.</p>}
 
               <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-[#6F747A] block mb-1.5">Choose a size</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-[#6F747A] block">Choose a size</label>
+                  <button type="button" onClick={() => setAiFitOpen(true)} className="text-[10px] font-bold uppercase tracking-wider text-[#781F37] hover:underline flex items-center gap-1">
+                    <Sparkles className="w-3 h-3" /> Try with AI Fit Preview
+                  </button>
+                </div>
                 <select required value={selectedSize} onChange={(e) => setSelectedSize(e.target.value)} className={inputClass}>
                   <option value="">Select your size</option>
                   {availableSizes.map((size) => <option key={size} value={size}>{size}</option>)}
@@ -418,21 +420,8 @@ export default function ProductDetail() {
         </div>
       </div>
       {passportOpen && <GarmentPassportModal garment={garment} onClose={() => setPassportOpen(false)} />}
-      {pendingBooking && <PaymentModal title="Complete rental payment" amount={pendingBooking.estimatedTotal} summary={[
-        { label: `${garment.name} · ${duration} day${duration === 1 ? '' : 's'}`, value: `₹${Number(pendingBooking.rentalPrice || rentalFee).toLocaleString('en-IN')}` },
-        { label: 'Platform fee', value: `₹${Number(pendingBooking.platformFee || 0).toLocaleString('en-IN')}` },
-        ...(Number(pendingBooking.protectionPremium || 0) ? [{ label: 'Rental Protection', value: `₹${Number(pendingBooking.protectionPremium).toLocaleString('en-IN')}` }] : []),
-        ...(Number(pendingBooking.deposit || 0) ? [{ label: 'Refundable deposit', value: `₹${Number(pendingBooking.deposit).toLocaleString('en-IN')}` }] : []),
-        { label: `${displayDate(pendingBooking.pickupDate)} – ${displayDate(pendingBooking.returnDate)}`, value: '' },
-      ]} onPay={(method, succeed) => payRental(pendingBooking.id, method, succeed).then((payment) => { setPaymentComplete(payment.status === 'successful'); return payment })} onClose={async () => {
-        if (paymentComplete) {
-          clearSessionDraft(`${productDraftKey}:fulfilment`); clearSessionDraft(`${productDraftKey}:postcode`); clearSessionDraft(`${productDraftKey}:duration`); clearSessionDraft(`${productDraftKey}:size`); clearSessionDraft(`${productDraftKey}:pickup-date`); clearSessionDraft(`${productDraftKey}:protection`)
-          navigate(account?.role === 'business' ? '/business' : '/my-closet')
-        } else {
-          try { await cancelRentalCheckout(pendingBooking.id) } catch { /* The payment may already have released this request. */ }
-        }
-        setPendingBooking(null)
-      }} />}
+      {aiFitOpen && <AIFitPreviewModal garment={garment} onClose={() => setAiFitOpen(false)} onConfirmSize={(size) => { setSelectedSize(size); setAiFitOpen(false); }} />}
     </div>
   )
 }
+

@@ -2,12 +2,18 @@ import { useState } from 'react'
 import { clearSessionDraft, useSessionDraft } from '../hooks/useSessionDraft'
 import { storageBucket, supabase } from '../lib/supabase'
 import { ShoppingBag } from 'lucide-react'
+import { useMarketplace } from '../context/useMarketplace'
+import PaymentModal from './PaymentModal'
+import RentalChat from './RentalChat'
 
 const STATUS_LABELS = {
   requested: 'Requested',
+  approved: 'Approved',
   confirmed: 'Confirmed',
+  handover_pending: 'Handover pending',
   in_use: 'In use',
   return_pending: 'Return pending',
+  disputed: 'Disputed',
   completed: 'Completed',
   declined: 'Declined',
   cancelled: 'Cancelled',
@@ -15,18 +21,25 @@ const STATUS_LABELS = {
 
 const ACTIONS = {
   requested: {
-    owner: [{ status: 'confirmed', label: 'Confirm request' }, { status: 'declined', label: 'Decline' }],
+    owner: [{ status: 'approved', label: 'Approve request' }, { status: 'declined', label: 'Decline' }],
     customer: [{ status: 'cancelled', label: 'Withdraw request' }],
   },
-  confirmed: {
-    owner: [{ status: 'in_use', label: 'Mark handed over' }],
+  approved: {
+    owner: [{ status: 'cancelled', label: 'Cancel request' }],
     customer: [{ status: 'cancelled', label: 'Cancel request' }],
+  },
+  confirmed: {
+    owner: [{ status: 'handover_pending', label: 'Hand over' }, { status: 'cancelled', label: 'Cancel request' }],
+    customer: [{ status: 'cancelled', label: 'Cancel request' }],
+  },
+  handover_pending: {
+    customer: [{ status: 'in_use', label: 'Confirm receipt' }],
   },
   in_use: {
     customer: [{ status: 'return_pending', label: 'Mark returned' }],
   },
   return_pending: {
-    owner: [{ status: 'completed', label: 'Confirm return' }],
+    owner: [{ status: 'completed', label: 'Confirm return' }, { status: 'disputed', label: 'Report Damage' }],
   },
 }
 
@@ -69,6 +82,7 @@ function todayInputValue() {
 }
 
 export default function RentalActivity({ booking, account, onStatusChange, hasReviewForBooking = false, onReviewSubmit, existingClaim, onProtectionClaim, onClaimResponse }) {
+  const { payRental } = useMarketplace()
   const reviewDraftKey = `rewear:${account.id}:review:${booking.id}`
   const [review, setReview] = useSessionDraft(reviewDraftKey, { rating: '5', fit: '', condition: '', comment: '' })
   const [reviewImages, setReviewImages] = useState([])
@@ -79,7 +93,9 @@ export default function RentalActivity({ booking, account, onStatusChange, hasRe
   const [claimAmount, setClaimAmount] = useState('')
   const [claimFiles, setClaimFiles] = useState([])
   const [claimMessage, setClaimMessage] = useState('')
+  const [paying, setPaying] = useState(false)
   const [claimBusy, setClaimBusy] = useState(false)
+  const [showClaimForm, setShowClaimForm] = useState(false)
   const [ownerResponse, setOwnerResponse] = useState('')
   const [conditionPhotos, setConditionPhotos] = useState([])
   const isOwner = String(booking.ownerId || '') === String(account.id)
@@ -126,8 +142,8 @@ export default function RentalActivity({ booking, account, onStatusChange, hasRe
     setSavingAction(true)
     setActionError('')
     try {
-      const needsPhotos = booking.highValueProtectionRequired && ['in_use', 'return_pending'].includes(status)
-      if (needsPhotos && !conditionPhotos.length) throw new Error(status === 'in_use' ? 'Add a handover photo before continuing.' : 'Add a return photo before continuing.')
+      const needsPhotos = booking.highValueProtectionRequired && ['handover_pending', 'return_pending'].includes(status)
+      if (needsPhotos && !conditionPhotos.length) throw new Error(status === 'handover_pending' ? 'Add a handover photo before continuing.' : 'Add a return photo before continuing.')
       const photoPaths = []
       for (const file of needsPhotos ? conditionPhotos : []) {
         if (!supabase) throw new Error('Photo upload is not configured.')
@@ -212,14 +228,23 @@ export default function RentalActivity({ booking, account, onStatusChange, hasRe
             <small className="block text-xs text-[#6F747A] mt-1">{conditionPhotos.length ? `${conditionPhotos.length} photo${conditionPhotos.length === 1 ? '' : 's'} selected` : 'Required to continue this high-value rental.'}</small>
           </label>
         )}
-        {actions.length > 0 && (
+        {(actions.length > 0 || (!isOwner && booking.status === 'approved' && booking.paymentStatus !== 'successful')) && (
           <div className="flex flex-wrap gap-3 mt-4">
+            {!isOwner && booking.status === 'approved' && booking.paymentStatus !== 'successful' && (
+              <button
+                className="px-4 py-2 rounded-xl text-sm font-medium transition-colors bg-[#197B5B] hover:bg-[#136147] text-white"
+                type="button"
+                onClick={() => setPaying(true)}
+              >
+                Pay now
+              </button>
+            )}
             {actions.map((action, index) => (
               <button
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${index === 0 ? 'bg-[#781F37] hover:bg-[#5E182B] text-white' : 'bg-white border border-[#E8E1D8] hover:bg-[#FFF9F1] text-[#18212B]'}`}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${index === 0 && (!(!isOwner && booking.status === 'approved')) ? 'bg-[#781F37] hover:bg-[#5E182B] text-white' : 'bg-white border border-[#E8E1D8] hover:bg-[#FFF9F1] text-[#18212B]'}`}
                 key={action.status}
                 type="button"
-                disabled={savingAction || (action.status === 'in_use' && !handoverIsReady)}
+                disabled={savingAction || (action.status === 'handover_pending' && !handoverIsReady)}
                 onClick={() => changeStatus(action.status)}
               >
                 {action.label}
@@ -227,11 +252,39 @@ export default function RentalActivity({ booking, account, onStatusChange, hasRe
             ))}
           </div>
         )}
+        {paying && (
+          <PaymentModal
+            title="Complete rental payment"
+            amount={booking.estimatedTotal}
+            summary={[
+              { label: `${booking.garmentName} • ${booking.duration} day${booking.duration === 1 ? '' : 's'}`, value: `₹${Number(booking.rentalPrice).toLocaleString('en-IN')}` },
+              { label: 'Platform fee', value: `₹${Number(booking.platformFee || 0).toLocaleString('en-IN')}` },
+              ...(Number(booking.protectionPremium || 0) ? [{ label: 'Rental Protection', value: `₹${Number(booking.protectionPremium).toLocaleString('en-IN')}` }] : []),
+              ...(Number(booking.deposit || 0) ? [{ label: 'Refundable deposit', value: `₹${Number(booking.deposit).toLocaleString('en-IN')}` }] : []),
+              { label: `${formatDate(booking.pickupDate)} - ${formatDate(booking.returnDate)}`, value: '' }
+            ]}
+            onPay={async (method, succeed) => {
+              const payment = await payRental(booking.id, method, succeed)
+              return payment
+            }}
+            onClose={() => setPaying(false)}
+          />
+        )}
         {actionError && <p className="text-sm text-red-600 mt-2" role="alert">{actionError}</p>}
-        
-        {!isOwner && booking.protectionEnabled && booking.returnedAt && onProtectionClaim && (
+
+        {['confirmed', 'handover_pending', 'in_use', 'return_pending'].includes(booking.status) && (
+          <RentalChat bookingId={booking.id} currentUserId={account.id} />
+        )}
+
+        {!isOwner && booking.protectionEnabled && ['return_pending', 'disputed'].includes(booking.status) && onProtectionClaim && (
           existingClaim ? (
             <p className="text-sm mt-4 p-3 bg-[#FFF9F1] rounded-xl border border-[#E8E1D8]">Protection claim: <strong className="text-[#18212B]">{existingClaim.status}</strong></p>
+          ) : !showClaimForm ? (
+            <div className="mt-6 border-t border-[#E8E1D8] pt-4">
+              <button type="button" className="text-sm text-[#781F37] font-semibold hover:underline" onClick={() => setShowClaimForm(true)}>
+                Report accidental damage
+              </button>
+            </div>
           ) : (
             <form className="mt-6 p-4 border border-[#E8E1D8] rounded-xl bg-white" onSubmit={submitClaim}>
               <h3 className="font-serif-couture text-xl text-[#18212B] mb-1">Report eligible accidental damage</h3>
@@ -253,7 +306,8 @@ export default function RentalActivity({ booking, account, onStatusChange, hasRe
               </label>
               
               {claimMessage && <p className="text-sm text-[#18212B] mb-3" role="status">{claimMessage}</p>}
-              <button className="bg-white border border-[#E8E1D8] hover:bg-[#FFF9F1] text-[#18212B] px-4 py-2 rounded-xl text-sm font-medium transition-colors" disabled={claimBusy} type="submit">{claimBusy ? 'Sending…' : 'Submit protection claim'}</button>
+              <button className="bg-white border border-[#E8E1D8] hover:bg-[#FFF9F1] text-[#18212B] px-4 py-2 rounded-xl text-sm font-medium transition-colors" disabled={claimBusy} type="submit">{claimBusy ? 'Sending...' : 'Submit protection claim'}</button>
+              <button type="button" onClick={() => setShowClaimForm(false)} className="ml-3 px-4 py-2 text-sm font-medium text-stone-600 hover:text-[#18212B] hover:bg-stone-50 rounded-xl transition-colors" disabled={claimBusy}>Cancel</button>
             </form>
           )
         )}
@@ -271,11 +325,11 @@ export default function RentalActivity({ booking, account, onStatusChange, hasRe
           </form>
         )}
         
-        {claimMessage && !(!isOwner && booking.protectionEnabled && booking.returnedAt && !existingClaim) && <p className="text-sm text-[#18212B] mt-4" role="status">{claimMessage}</p>}
+        {claimMessage && !(!isOwner && booking.protectionEnabled && ['return_pending', 'disputed'].includes(booking.status) && !existingClaim) && <p className="text-sm text-[#18212B] mt-4" role="status">{claimMessage}</p>}
         
-        {!isOwner && booking.status === 'completed' && onReviewSubmit && (
+        {!isOwner && ['return_pending', 'completed'].includes(booking.status) && onReviewSubmit && (
           hasReviewForBooking ? (
-            <p className="text-sm text-[#197B5B] bg-emerald-50 px-3 py-2 rounded-xl mt-4 inline-block">Feedback submitted for this completed rental.</p>
+            <p className="text-sm text-[#197B5B] bg-emerald-50 px-3 py-2 rounded-xl mt-4 inline-block">Feedback submitted for this rental.</p>
           ) : (
             <form className="mt-6 p-4 border border-[#E8E1D8] rounded-xl bg-white" onSubmit={submitReview}>
               <h3 className="font-serif-couture text-xl text-[#18212B] mb-4">How was this piece?</h3>
@@ -327,3 +381,10 @@ export default function RentalActivity({ booking, account, onStatusChange, hasRe
     </article>
   )
 }
+
+
+
+
+
+
+

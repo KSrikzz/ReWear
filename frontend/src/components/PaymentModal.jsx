@@ -11,8 +11,7 @@ const METHODS = [
 export default function PaymentModal({ title = 'Secure checkout', amount, summary = [], onPay, onClose }) {
   const [method, setMethod] = useState('upi')
   const [state, setState] = useState('ready')
-  const [failureMode, setFailureMode] = useState(false)
-  const [payment, setPayment] = useState(null)
+    const [payment, setPayment] = useState(null)
   const [error, setError] = useState('')
 
   async function pay() {
