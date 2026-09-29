@@ -98,29 +98,284 @@ public class GarmentService {
         StringBuilder sql = new StringBuilder(SELECT_WITH_INSIGHTS)
             .append(" WHERE g.active = true AND g.under_maintenance = false AND g.retired_at IS NULL");
         MapSqlParameterSource params = new MapSqlParameterSource();
-        
-        
-        
-        
-        
-        if (criteria.rentalStart() != null && criteria.rentalEnd() != null) {
-            sql.append(" AND (SELECT COALESCE(MAX((SELECT count(*) FROM bookings b WHERE b.garment_id = g.id ")
-                .append("AND b.status IN ('requested', 'confirmed', 'in_use', 'return_pending') ")
-                .append("AND daterange(b.pickup_date, b.return_date, '[]') @> candidate.rental_day)), 0) ")
-                .append("FROM (SELECT CAST(:rentalStart AS date) AS rental_day UNION ")
-                .append("SELECT b.pickup_date FROM bookings b WHERE b.garment_id = g.id ")
-                .append("AND b.status IN ('requested', 'confirmed', 'in_use', 'return_pending') ")
-                .append("AND b.pickup_date BETWEEN :rentalStart AND :rentalEnd ")
-                .append("AND daterange(b.pickup_date, b.return_date, '[]') && daterange(:rentalStart, :rentalEnd, '[]')) candidate) < g.stock_quantity");
-            params.addValue("rentalStart", criteria.rentalStart()).addValue("rentalEnd", criteria.rentalEnd());
-        }
+        // AI Discovery: return all active garments and let RecommendationService rank them
+        // by match score instead of strict SQL filtering, for broader and smarter results
         sql.append(" ORDER BY g.created_at DESC LIMIT :candidateLimit OFFSET :candidateOffset");
         params.addValue("candidateLimit", Math.max(criteria.limit() + criteria.offset(), 240))
             .addValue("candidateOffset", 0);
         return jdbc.queryForList(sql.toString(), params);
     }
 
-    private static List<String> parseArray(Object raw) {
+    private static String categoryPredicate(String category) {
+        return switch (category.trim().toLowerCase()) {
+            case "dress", "dresses", "gown", "gowns" -> "(g.category ILIKE '%dress%' OR g.category ILIKE '%gown%' OR g.name ILIKE '%dress%' OR g.name ILIKE '%gown%' OR g.name ILIKE '%anarkali%')";
+            case "blazer", "blazers" -> "(g.category ILIKE '%blazer%' OR g.name ILIKE '%blazer%')";
+            case "suit", "suits", "formal wear" -> "(g.category ILIKE '%suit%' OR g.category ILIKE '%formal%' OR g.name ILIKE '%suit%' OR g.name ILIKE '%tux%')";
+            case "saree", "sarees", "sari" -> "(g.category ILIKE '%saree%' OR g.category ILIKE '%sari%' OR g.name ILIKE '%saree%' OR g.name ILIKE '%sari%')";
+            case "kurta", "kurtas" -> "(g.category ILIKE '%kurta%' OR g.name ILIKE '%kurta%')";
+            case "ethnic wear" -> "(g.category ILIKE '%ethnic%' OR g.category ILIKE '%lehenga%' OR g.category ILIKE '%saree%' OR g.category ILIKE '%kurta%')";
+            case "trousers" -> "(g.category ILIKE '%trouser%' OR g.name ILIKE '%trouser%')";
+            case "jacket", "jackets" -> "(g.category ILIKE '%jacket%' OR g.name ILIKE '%jacket%')";
+            case "shirts" -> "(g.category ILIKE '%shirt%' OR g.name ILIKE '%shirt%')";
+            case "accessories" -> "(g.category ILIKE '%accessor%' OR g.name ILIKE '%accessor%')";
+            default -> "(g.category ILIKE :category OR g.name ILIKE :category)";
+        };
+    }
+
+    public Map<String, Object> get(UUID garmentId) {
+        List<Map<String, Object>> results = jdbc.queryForList(
+            SELECT_WITH_INSIGHTS + " WHERE g.id = :id AND g.active = true AND g.under_maintenance = false AND g.retired_at IS NULL", Map.of("id", garmentId));
+        if (results.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This clothing listing is not available.");
+        return withArrayFields(results).getFirst();
+    }
+
+    public List<Map<String, Object>> mine(Jwt jwt) {
+        ProfileResponse profile = profiles.get(jwt);
+        return withArrayFields(jdbc.queryForList(SELECT_WITH_INSIGHTS + " WHERE g.owner_id = :ownerId ORDER BY g.created_at DESC",
+            Map.of("ownerId", UUID.fromString(profile.id()))));
+    }
+
+    public List<String> savedIds(Jwt jwt) {
+        UUID profileId = UUID.fromString(profiles.get(jwt).id());
+        return jdbc.queryForList("SELECT garment_id::text FROM saved_garments WHERE profile_id = :profileId ORDER BY created_at DESC",
+            Map.of("profileId", profileId), String.class);
+    }
+
+    @Transactional
+    public void save(Jwt jwt, UUID garmentId) {
+        UUID profileId = UUID.fromString(profiles.get(jwt).id());
+        Integer active = jdbc.queryForObject("SELECT count(*) FROM garments WHERE id=:id AND active AND NOT under_maintenance AND retired_at IS NULL",
+            Map.of("id", garmentId), Integer.class);
+        if (active == null || active == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This listing is not available to save.");
+        jdbc.update("INSERT INTO saved_garments(profile_id, garment_id) VALUES (:profileId, :garmentId) ON CONFLICT DO NOTHING",
+            Map.of("profileId", profileId, "garmentId", garmentId));
+    }
+
+    @Transactional
+    public void unsave(Jwt jwt, UUID garmentId) {
+        UUID profileId = UUID.fromString(profiles.get(jwt).id());
+        jdbc.update("DELETE FROM saved_garments WHERE profile_id=:profileId AND garment_id=:garmentId",
+            Map.of("profileId", profileId, "garmentId", garmentId));
+    }
+
+    @Transactional
+    public Map<String, Object> create(Jwt jwt, SaveRequest request) {
+        ProfileResponse profile = profiles.get(jwt);
+        validateSizes(profile, request);
+        validateApproximateLocation(request);
+        validatePublicArea(request.distance());
+        String image = clean(request.image());
+        if (image != null && image.startsWith("data:")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Upload the photo first and submit its storage URL.");
+        }
+        UUID id = UUID.randomUUID();
+        MapSqlParameterSource parameters = new MapSqlParameterSource()
+            .addValue("id", id)
+            .addValue("ownerId", UUID.fromString(profile.id()))
+            .addValue("ownerType", profile.role())
+            .addValue("ownerName", profile.businessName() == null ? profile.name() : profile.businessName())
+            .addValue("name", request.name().trim())
+            .addValue("designer", defaultTo(request.designer(), profile.businessName() == null ? profile.name() : profile.businessName()))
+            .addValue("category", request.category().trim())
+            .addValue("condition", request.condition().trim())
+            .addValue("description", clean(request.description()))
+            .addValue("price", request.price())
+            .addValue("mrp", request.mrp() == null ? request.price() : request.mrp())
+            .addValue("size", request.size().trim())
+            .addValue("fitMatch", clean(request.fitMatch()))
+            .addValue("location", request.distance().trim())
+            .addValue("careInstructions", clean(request.careInstructions()))
+            .addValue("image", image)
+            .addValue("style", clean(request.style()))
+            .addValue("colour", clean(request.colour()))
+            .addValue("occasions", joinList(request.occasions()))
+            .addValue("pickupAvailable", request.pickupAvailable() == null || request.pickupAvailable())
+            .addValue("deliveryAvailable", Boolean.TRUE.equals(request.deliveryAvailable()))
+            .addValue("deliveryPostcodes", joinList(request.deliveryPostcodes()))
+            .addValue("latitude", coordinate(request.approximateLatitude()))
+            .addValue("longitude", coordinate(request.approximateLongitude()))
+            .addValue("heightCm", request.heightCm())
+            .addValue("chestCm", request.chestCm())
+            .addValue("waistCm", request.waistCm())
+            .addValue("hipCm", request.hipCm())
+            .addValue("shoulderCm", request.shoulderCm())
+            .addValue("inseamCm", request.inseamCm());
+        jdbc.update("""
+            INSERT INTO garments (id, owner_id, owner_type, owner_name, name, designer, category, condition,
+                description, rental_price, retail_value, deposit_amount, stock_quantity, size, fit_match, location,
+                care_instructions, badge_color, image_url, style_tag, colour_tag, occasions,
+                pickup_available, delivery_available, delivery_postcodes, public_latitude, public_longitude,
+                height_cm, chest_cm, waist_cm, hip_cm, shoulder_cm, inseam_cm, active)
+            VALUES (:id, :ownerId, :ownerType, :ownerName, :name, :designer, :category, :condition,
+                :description, :price, :mrp, :depositAmount, :quantity, :size, :fitMatch, :location,
+                :careInstructions, 'secondary', :image, :style, :colour, string_to_array(:occasions, ','),
+                :pickupAvailable, :deliveryAvailable, string_to_array(:deliveryPostcodes, ','), :latitude, :longitude,
+                :heightCm, :chestCm, :waistCm, :hipCm, :shoulderCm, :inseamCm, true)
+            """, parameters);
+        return getOwned(id, UUID.fromString(profile.id()));
+    }
+
+    @Transactional
+    public Map<String, Object> update(Jwt jwt, UUID id, SaveRequest request) {
+        ProfileResponse profile = profiles.get(jwt);
+        jdbc.queryForList("SELECT id FROM garments WHERE id = :id AND owner_id = :ownerId FOR UPDATE",
+            Map.of("id", id, "ownerId", UUID.fromString(profile.id())));
+        validateSizes(profile, request);
+        validateApproximateLocation(request);
+        validatePublicArea(request.distance());
+        String image = clean(request.image());
+        if (image != null && image.startsWith("data:")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Upload the photo first and submit its storage URL.");
+        }
+        validateStockQuantity(id, request.quantity() == null ? 1 : request.quantity());
+        int changed = jdbc.update("""
+            UPDATE garments SET name = :name, designer = :designer, category = :category, condition = :condition,
+                description = :description, rental_price = :price, retail_value = :mrp, deposit_amount = :depositAmount, stock_quantity = :quantity,
+                size = :size, fit_match = :fitMatch, location = :location, care_instructions = :careInstructions,
+                image_url = :image, style_tag = :style, colour_tag = :colour,
+                occasions = string_to_array(:occasions, ','), pickup_available = :pickupAvailable,
+                delivery_available = :deliveryAvailable, delivery_postcodes = string_to_array(:deliveryPostcodes, ','),
+                public_latitude = :latitude, public_longitude = :longitude,
+                height_cm = :heightCm, chest_cm = :chestCm, waist_cm = :waistCm, hip_cm = :hipCm,
+                shoulder_cm = :shoulderCm, inseam_cm = :inseamCm, updated_at = now()
+            WHERE id = :id AND owner_id = :ownerId AND active = true
+            """, saveParams(profile, id, request, image));
+        if (changed == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This listing could not be found in your wardrobe.");
+        return getOwned(id, UUID.fromString(profile.id()));
+    }
+
+    private void validateStockQuantity(UUID id, int quantity) {
+        Integer peakReservations = jdbc.queryForObject("""
+            SELECT COALESCE(MAX((
+                SELECT count(*) FROM bookings b
+                WHERE b.garment_id = :id
+                  AND b.status IN ('requested', 'confirmed', 'in_use', 'return_pending')
+                  AND daterange(b.pickup_date, b.return_date, '[]') @> dates.rental_day
+            )), 0)
+            FROM (SELECT DISTINCT pickup_date AS rental_day FROM bookings
+                  WHERE garment_id = :id
+                    AND status IN ('requested', 'confirmed', 'in_use', 'return_pending')) dates
+            """, Map.of("id", id), Integer.class);
+        if (peakReservations != null && peakReservations > quantity) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Stock cannot be reduced below the number of pieces already reserved for overlapping dates.");
+        }
+    }
+
+    @Transactional
+    public void setAvailability(Jwt jwt, UUID id, boolean available) {
+        ProfileResponse profile = profiles.get(jwt);
+        int changed = jdbc.update("UPDATE garments SET active = :active, updated_at = now() WHERE id = :id AND owner_id = :ownerId",
+            Map.of("active", available, "id", id, "ownerId", UUID.fromString(profile.id())));
+        if (changed == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This listing could not be found in your wardrobe.");
+    }
+
+    @Transactional
+    public Map<String, Object> updateLifecycle(Jwt jwt, UUID id, LifecycleRequest request) {
+        ProfileResponse profile = profiles.get(jwt);
+        UUID ownerId = UUID.fromString(profile.id());
+        Map<String, Object> row;
+        try {
+            row = jdbc.queryForMap("""
+                SELECT condition, under_maintenance AS \"underMaintenance\", retired_at IS NOT NULL AS retired
+                FROM garments WHERE id = :id AND owner_id = :ownerId FOR UPDATE
+                """, Map.of("id", id, "ownerId", ownerId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException missing) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This listing could not be found in your wardrobe.");
+        }
+
+        String previousCondition = String.valueOf(row.get("condition"));
+        String nextCondition = clean(request.condition());
+        boolean wasMaintained = Boolean.TRUE.equals(row.get("underMaintenance"));
+        boolean wasRetired = Boolean.TRUE.equals(row.get("retired"));
+        boolean changedCondition = nextCondition != null && !nextCondition.equalsIgnoreCase(previousCondition);
+        boolean changedMaintenance = request.underMaintenance() != null && request.underMaintenance() != wasMaintained;
+        boolean changedRetired = request.retired() != null && request.retired() != wasRetired;
+        String repairNote = clean(request.repairNote());
+        if (!changedCondition && !changedMaintenance && !changedRetired && repairNote == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Make a lifecycle change or add a repair note.");
+        }
+
+        if (nextCondition != null && nextCondition.length() > 24) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Condition must be 24 characters or fewer.");
+        }
+        jdbc.update("""
+            UPDATE garments SET condition = COALESCE(:condition, condition),
+                under_maintenance = COALESCE(:underMaintenance, under_maintenance),
+                retired_at = CASE WHEN :retired IS NULL THEN retired_at
+                    WHEN :retired THEN COALESCE(retired_at, now()) ELSE NULL END,
+                updated_at = now()
+            WHERE id = :id AND owner_id = :ownerId
+            """, new MapSqlParameterSource()
+                .addValue("condition", nextCondition, Types.VARCHAR)
+                .addValue("underMaintenance", request.underMaintenance(), Types.BOOLEAN)
+                .addValue("retired", request.retired(), Types.BOOLEAN)
+                .addValue("id", id)
+                .addValue("ownerId", ownerId));
+
+        if (changedCondition) recordLifecycle(id, ownerId, "condition_updated", previousCondition, nextCondition, repairNote);
+        if (changedMaintenance) recordLifecycle(id, ownerId,
+            request.underMaintenance() ? "maintenance_started" : "maintenance_completed", previousCondition, nextCondition, repairNote);
+        if (changedRetired) recordLifecycle(id, ownerId,
+            request.retired() ? "retired" : "reactivated", previousCondition, nextCondition, repairNote);
+        if (repairNote != null) recordLifecycle(id, ownerId, "repair_recorded", previousCondition, nextCondition, repairNote);
+        return getOwned(id, ownerId);
+    }
+
+    public List<Map<String, Object>> lifecycleHistory(Jwt jwt, UUID id) {
+        ProfileResponse profile = profiles.get(jwt);
+        UUID ownerId = UUID.fromString(profile.id());
+        if (jdbc.queryForList("SELECT id FROM garments WHERE id = :id AND owner_id = :ownerId", Map.of("id", id, "ownerId", ownerId)).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This listing could not be found in your wardrobe.");
+        }
+        return jdbc.queryForList("""
+            SELECT id, event_type AS \"eventType\", previous_condition AS \"previousCondition\",
+                   next_condition AS \"nextCondition\", note, created_at AS \"createdAt\"
+            FROM garment_lifecycle_events WHERE garment_id = :id
+            ORDER BY created_at DESC LIMIT 50
+            """, Map.of("id", id));
+    }
+
+    private void recordLifecycle(UUID garmentId, UUID ownerId, String eventType, String previousCondition,
+                                 String nextCondition, String note) {
+        jdbc.update("""
+            INSERT INTO garment_lifecycle_events (garment_id, actor_id, event_type, previous_condition, next_condition, note)
+            VALUES (:garmentId, :actorId, :eventType, :previousCondition, :nextCondition, :note)
+            """, new MapSqlParameterSource()
+                .addValue("garmentId", garmentId).addValue("actorId", ownerId).addValue("eventType", eventType)
+                .addValue("previousCondition", previousCondition, Types.VARCHAR)
+                .addValue("nextCondition", nextCondition, Types.VARCHAR)
+                .addValue("note", note, Types.VARCHAR));
+    }
+
+    private Map<String, Object> getOwned(UUID id, UUID ownerId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            SELECT_WITH_INSIGHTS + " WHERE g.id = :id AND g.owner_id = :ownerId", Map.of("id", id, "ownerId", ownerId));
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This listing could not be found.");
+        return withArrayFields(rows).getFirst();
+    }
+
+    private static List<Map<String, Object>> withArrayFields(List<Map<String, Object>> rows) {
+        return rows.stream().map(row -> {
+            Map<String, Object> result = new java.util.LinkedHashMap<>(row);
+            result.put("occasions", stringArray(row.get("occasions")));
+            result.put("deliveryPostcodes", stringArray(row.get("deliveryPostcodes")));
+            return result;
+        }).toList();
+    }
+
+    private static List<String> stringArray(Object value) {
+        if (value == null) return List.of();
+        Object raw = value;
+        if (value instanceof java.sql.Array sqlArray) {
+            try {
+                raw = sqlArray.getArray();
+            } catch (java.sql.SQLException ignored) {
+                return List.of();
+            } finally {
+                try { sqlArray.free(); } catch (java.sql.SQLException ignored) {}
+            }
+        }
         if (raw instanceof String[] strings) {
             return java.util.Arrays.stream(strings).filter(item -> item != null && !item.isBlank()).toList();
         }
