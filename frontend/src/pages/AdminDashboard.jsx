@@ -8,12 +8,12 @@ const sections = [
 ]
 const labels = { totalGarments: 'All garments', activeGarments: 'Active listings', personalAccounts: 'Personal accounts', businessAccounts: 'Business accounts', registeredUsers: 'Total users', newUsersToday: 'New today', totalRentals: 'Rental orders', activeRentals: 'Active rentals', completedRentals: 'Completed rentals', cancelledRentals: 'Cancelled rentals', platformCommissions: 'Platform commissions', membershipRevenue: 'Membership revenue', transactionVolume: 'Transaction volume', activeMemberships: 'Active memberships', expiredMemberships: 'Expired memberships', silverMembers: 'Silver members', goldMembers: 'Gold members', protectionRevenue: 'Protection premiums', pendingClaims: 'Pending claims', pendingDisputes: 'Pending disputes' }
 
-function displayValue(value) {
-  if (value == null) return '—'
+function displayValue(value, key) {
+  if (value == null) return '-'
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
-  if (typeof value === 'number' && !Number.isInteger(value)) return `₹${value.toLocaleString('en-IN')}`
-  if (typeof value === 'number' && /(revenue|commission|volume|amount|price|total|fee|premium|payout)/i.test(value.key || '')) return `₹${value.toLocaleString('en-IN')}`
-  if (Array.isArray(value)) return value.join(', ')
+  if (typeof value === 'number' && !Number.isInteger(value)) return '\u20b9' + value.toLocaleString('en-IN')
+  if (typeof value === 'number' && !Number.isInteger(value)) return '\u20b9' + value.toLocaleString('en-IN')
+  if (typeof value === 'number' && /(revenue|commission|volume|amount|price|total|fee|premium|payout)/i.test(key || '')) return '\u20b9' + value.toLocaleString('en-IN')
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }
@@ -25,6 +25,7 @@ export default function AdminDashboard() {
   const [error, setError] = useState('')
   const [busyClaim, setBusyClaim] = useState('')
   const [busyUser, setBusyUser] = useState('')
+  const [busyRental, setBusyRental] = useState('')
   const current = sections.find(([id]) => id === section)
 
   async function load(target = section) {
@@ -50,6 +51,15 @@ export default function AdminDashboard() {
     try { await apiRequest(`/api/admin/users/${user.id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }); await load('users') }
     catch (statusError) { setError(statusError.message || 'Account status could not be changed.') }
     finally { setBusyUser('') }
+  }
+
+  async function resolveDispute(rental) {
+    setBusyRental(rental.id)
+    try {
+      await apiRequest(`/api/admin/rentals/${rental.id}/resolve`, { method: 'PATCH', body: JSON.stringify({ resolution: 'completed' }) })
+      await load('rentals')
+    } catch (resolveError) { setError(resolveError.message || 'Dispute could not be resolved.') }
+    finally { setBusyRental('') }
   }
 
   const rows = Array.isArray(data) ? data : []
@@ -111,13 +121,14 @@ export default function AdminDashboard() {
                     ))}
                     {section === 'claims' && <th className="px-4 py-3">Review</th>}
                     {section === 'users' && <th className="px-4 py-3">Account action</th>}
+                    {section === 'rentals' && <th className="px-4 py-3">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E8E1D8]">
                   {rows.map((row, index) => (
                     <tr className="hover:bg-stone-50 transition-colors" key={row.id || row.businessUserId || row.transactionId || index}>
-                      {Object.entries(row).filter(([key]) => !['customerId','ownerId','userId'].includes(key)).map(([key, value]) => (
-                        <td className="px-4 py-3 whitespace-nowrap text-[#18212B]" key={key}>{displayValue(value)}</td>
+                      {Object.keys(rows[0]).filter((key) => !['customerId','ownerId','userId'].includes(key)).map((key) => (
+                        <td className="px-4 py-3 whitespace-nowrap text-[#18212B]" key={key}>{displayValue(row[key], key)}</td>
                       ))}
                       {section === 'claims' && (
                         <td className="px-4 py-3">
@@ -134,6 +145,15 @@ export default function AdminDashboard() {
                           {row.role !== 'admin' && (
                             <button className="px-3 py-1.5 bg-white border border-[#E8E1D8] rounded-lg text-xs font-semibold hover:bg-stone-50 disabled:opacity-50 text-[#18212B]" type="button" disabled={busyUser === row.id} onClick={() => void setUserStatus(row,row.accountStatus === 'suspended' ? 'active' : 'suspended')}>
                               {busyUser === row.id ? 'Saving…' : row.accountStatus === 'suspended' ? 'Reactivate' : 'Suspend'}
+                            </button>
+                          )}
+                        </td>
+                      )}
+                      {section === 'rentals' && (
+                        <td className="px-4 py-3">
+                          {row.status === 'disputed' && (
+                            <button className="px-3 py-1.5 bg-[#197B5B] text-white rounded-lg text-xs font-semibold hover:bg-[#146148] disabled:opacity-50" type="button" disabled={busyRental === row.id} onClick={() => void resolveDispute(row)}>
+                              {busyRental === row.id ? 'Resolving…' : 'Resolve & Complete'}
                             </button>
                           )}
                         </td>

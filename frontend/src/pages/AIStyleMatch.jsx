@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { Sparkles, ShieldCheck, MapPin, Ruler, SlidersHorizontal, Locate, ImagePlus, Shirt, Map as MapIcon, X } from 'lucide-react'
 import DiscoveryResultCard from '../components/DiscoveryResultCard'
 import LocalityMap from '../components/LocalityMap'
 import { useMarketplace } from '../context/useMarketplace'
 import { hasSessionDraft, useSessionDraft } from '../hooks/useSessionDraft'
+import { useSearchParams } from 'react-router-dom'
 import { apiRequest } from '../lib/api'
 
 const INITIAL_FORM = {
@@ -82,6 +83,24 @@ export default function AIStyleMatch() {
   const [mapView, setMapView] = useSessionDraft(`${discoveryDraftKey}:map-view`, false)
   const [selectedMapItem, setSelectedMapItem] = useSessionDraft(`${discoveryDraftKey}:selected-map-item`, '')
   const today = localTodayValue()
+
+  const [lastInterpretedQuery, setLastInterpretedQuery] = useState('')
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    let changed = false;
+    let nextForm = { ...form };
+    const q = searchParams.get('query');
+    if (q && form.query !== q) { nextForm.query = q; changed = true; }
+    const occ = searchParams.get('occasion');
+    if (occ && form.occasion !== occ) { nextForm.occasion = occ; changed = true; }
+    const area = searchParams.get('area');
+    if (area && form.area !== area) { nextForm.area = area; changed = true; }
+    if (changed) {
+      setForm(nextForm);
+    }
+  }, [searchParams]);
+
+  const searchRef = useRef(null)
 
   useEffect(() => {
     let active = true
@@ -201,7 +220,7 @@ export default function AIStyleMatch() {
   }
 
   async function search(event) {
-    event.preventDefault()
+    if (event && event.preventDefault) event.preventDefault()
     if (form.distanceKm === 'custom' && (numeric(form.customDistanceKm) == null || numeric(form.customDistanceKm) < 1 || numeric(form.customDistanceKm) > 100)) {
       setError('Enter a custom radius from 1 to 100 km, or choose a preset radius.')
       return
@@ -240,6 +259,21 @@ export default function AIStyleMatch() {
     }
   }
 
+  useEffect(() => {
+    searchRef.current = search
+  }, [search])
+
+  useEffect(() => {
+    if (!form.query || form.query === lastInterpretedQuery || form.query.trim() === '') return
+    const timeout = setTimeout(() => {
+      setLastInterpretedQuery(form.query)
+      if (searchRef.current) {
+        searchRef.current(new Event('submit'))
+      }
+    }, 1500)
+    return () => clearTimeout(timeout)
+  }, [form.query, lastInterpretedQuery])
+
   async function clearSavedPreferences() {
     setPreferencesError('')
     try {
@@ -270,8 +304,7 @@ export default function AIStyleMatch() {
     }
     return allItems
   }, [activeSection, allItems, form.budgetMax, result?.sections?.newArrivals])
-  const topItem = result?.items?.[0]
-  const cityForHubs = form.area.split(',').at(-1)?.trim()
+    const cityForHubs = form.area.split(',').at(-1)?.trim()
   const filteredHubs = hubs.filter((hub) => !cityForHubs || String(hub.city).toLowerCase().includes(cityForHubs.toLowerCase()))
 
   const inputClass = "w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm focus:ring-1 focus:ring-[#781F37] focus:border-[#781F37] outline-none transition-colors"
@@ -308,18 +341,54 @@ export default function AIStyleMatch() {
             <SlidersHorizontal className="w-6 h-6 text-[#781F37]" />
           </div>
 
-          <label className="block">
+          <div className="block relative">
             <span className={labelClass}>Describe your outfit in your own words</span>
-            <textarea 
-              className={`${inputClass} resize-y min-h-[100px]`} 
-              rows="3" 
-              maxLength="1000" 
-              value={form.query} 
-              onChange={(event) => update('query', event.target.value)} 
-              placeholder="I need a burgundy blazer for a wedding reception next Saturday, under ₹2,500." 
-            />
+            <div className="relative">
+              <textarea 
+                className={`${inputClass} resize-y min-h-[100px] pb-12`} 
+                rows="3" 
+                maxLength="1000" 
+                value={form.query} 
+                onChange={(event) => update('query', event.target.value)} 
+                placeholder="I need a burgundy blazer for a wedding reception next Saturday, under ₹2,500." 
+              />
+              <button 
+                type="button"
+                onClick={() => { setLastInterpretedQuery(form.query); search(); }}
+                className="absolute right-3 bottom-3 bg-[#18212B] text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-[#2A3441] transition shadow-sm z-10"
+              >
+                Interpret
+              </button>
+            </div>
             <small className="block text-xs text-[#6F747A] mt-2">AI can turn your request into editable filters. If unavailable, ReWear uses built-in search interpretation.</small>
-          </label>
+          </div>
+
+          {result?.filters && Object.keys(result.filters).filter(k => result.filters[k] != null && result.filters[k] !== '' && k !== 'sort').length > 0 && (
+            <div className="bg-[#197B5B]/5 border border-[#197B5B]/20 p-4 rounded-xl mb-6">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#197B5B] block mb-3">AI understood your request</span>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(result.filters).map(([key, value]) => {
+                  if (value == null || value === '' || key === 'sort') return null;
+                  return (
+                    <span key={key} className="inline-flex items-center gap-1.5 px-3 py-1 bg-white border border-[#197B5B]/30 rounded-full text-xs font-medium text-[#18212B] shadow-sm">
+                      <span className="text-[#6F747A] capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}:</span> {String(value)}
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          update(key, '');
+                          setResult(curr => curr ? { ...curr, filters: { ...curr.filters, [key]: '' } } : curr);
+                        }} 
+                        className="ml-1 text-[#6F747A] hover:text-[#781F37] transition"
+                        title={`Remove ${key} filter`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <label className="block"><span className={labelClass}>Occasion</span><select className={inputClass} value={form.occasion} onChange={(event) => update('occasion', event.target.value)}><option value="">Any occasion</option>{OCCASIONS.map((option) => <option key={option}>{option}</option>)}</select></label>

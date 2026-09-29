@@ -5,12 +5,40 @@ import { Search, MapPin, Globe, X, CheckCircle2 } from 'lucide-react'
 export default function LocationPicker({ selectedArea, garments, onSelect, onClose }) {
   const [search, setSearch] = useState('')
   const [hubs, setHubs] = useState([])
+  const [apiAreas, setApiAreas] = useState([])
+  const [isSearching, setIsSearching] = useState(false)
 
   useEffect(() => {
     let active = true
     apiRequest('/api/locations/hubs').then((result) => { if (active) setHubs(result) }).catch(() => {})
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    if (search.length < 3) {
+      setApiAreas([]);
+      return;
+    }
+    const fetchAreas = async () => {
+      setIsSearching(true);
+      try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(search)}&countrycodes=in&limit=10`);
+        const data = await response.json();
+        const formattedResults = data.map(item => {
+          const parts = item.display_name.split(',').map(s => s.trim());
+          return { value: parts.slice(0, 3).join(', '), source: 'Nominatim / OpenStreetMap' };
+        });
+        const unique = Array.from(new Map(formattedResults.map(item => [item.value, item])).values());
+        setApiAreas(unique);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setIsSearching(false);
+      }
+    };
+    const debounce = setTimeout(fetchAreas, 500);
+    return () => clearTimeout(debounce);
+  }, [search])
 
   const areas = useMemo(() => {
     const choices = new Map()
@@ -25,7 +53,9 @@ export default function LocationPicker({ selectedArea, garments, onSelect, onClo
     return [...choices.values()].sort((left, right) => left.value.localeCompare(right.value))
   }, [garments, hubs])
 
-  const filteredAreas = areas.filter((area) => area.value.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
+  const filteredAreas = search.length >= 3 
+    ? [...areas.filter((area) => area.value.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())), ...apiAreas] 
+    : areas.filter((area) => area.value.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
 
   useEffect(() => {
     function onKeyDown(event) {
@@ -109,7 +139,13 @@ export default function LocationPicker({ selectedArea, garments, onSelect, onClo
             )
           })}
           
-          {!filteredAreas.length && (
+          {isSearching && (
+            <div className="p-8 text-center text-[#6F747A]">
+              <div className="animate-spin w-8 h-8 border-4 border-[#197B5B] border-t-transparent rounded-full mx-auto mb-2" />
+              <p className="text-sm">Searching for locations...</p>
+            </div>
+          )}
+          {!isSearching && !filteredAreas.length && (
             <div className="p-8 text-center text-[#6F747A]">
               <MapPin className="w-8 h-8 mx-auto mb-2 text-stone-300" />
               <p className="text-sm">No pickup areas match that search yet.</p>
